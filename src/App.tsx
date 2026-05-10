@@ -171,6 +171,32 @@ function evalFloat(expr: string): number | null {
   }
 }
 
+// Returns true for plain numeric literals: "7", "1.5", "-3.14", ".5"
+function isSimpleDecimal(s: string): boolean {
+  return /^-?(\d+\.?\d*|\.\d+)$/.test(s.trim())
+}
+
+// Scale two floats to integers by multiplying by 10^k (up to 15 decimal places).
+function toScaledIntegers(a: number, b: number): [number, number] | null {
+  if (!isFinite(a) || !isFinite(b)) return null
+  for (let k = 0; k <= 15; k++) {
+    const s = 10 ** k
+    const ai = Math.round(a * s)
+    const bi = Math.round(b * s)
+    if (Number.isSafeInteger(ai) && Number.isSafeInteger(bi) &&
+        Math.abs(ai / s - a) < 1e-9 && Math.abs(bi / s - b) < 1e-9) {
+      return [ai, bi]
+    }
+  }
+  return null
+}
+
+// Round to the same number of decimal places as step to prevent float drift.
+function roundToStep(val: number, step: number): number {
+  const decimals = (step.toString().split('.')[1] ?? '').length
+  return parseFloat(val.toFixed(decimals))
+}
+
 // ─── Digit extraction ─────────────────────────────────────────────────────────
 
 function digitsExact(num: number, den: number, count: number): number[] {
@@ -202,12 +228,13 @@ const MAX_RATIONAL_DIGITS   = 10000
 const MAX_IRRATIONAL_DIGITS = 500
 
 function computeDigits(numExpr: string, denExpr: string, count: number): number[] {
-  // Fast path: both expressions are plain integers — no Decimal needed at all
+  // Fast path: both expressions are plain decimal literals — scale to integers
   const nf = evalFloat(numExpr)
   const df = evalFloat(denExpr)
   if (nf !== null && df !== null && df !== 0 &&
-      Number.isSafeInteger(nf) && Number.isSafeInteger(df)) {
-    return digitsExact(nf, df, count)
+      isSimpleDecimal(numExpr) && isSimpleDecimal(denExpr)) {
+    const scaled = toScaledIntegers(nf, df)
+    if (scaled) return digitsExact(scaled[0], scaled[1], count)
   }
 
   // Slow path: arbitrary-precision Decimal for irrationals
@@ -253,6 +280,18 @@ function App() {
   const dNumDigits = useDebounced(numDigits, 300)
   const dSegLen   = useDebounced(segLen,   150)
 
+  const numAnimDirRef  = useRef<1 | -1>(1)
+  const [numAnimActive, setNumAnimActive] = useState(false)
+  const [numAnimMin,    setNumAnimMin]    = useState('0')
+  const [numAnimMax,    setNumAnimMax]    = useState('10')
+  const [numAnimStep,   setNumAnimStep]   = useState('1')
+
+  const denAnimDirRef  = useRef<1 | -1>(1)
+  const [denAnimActive, setDenAnimActive] = useState(false)
+  const [denAnimMin,    setDenAnimMin]    = useState('1')
+  const [denAnimMax,    setDenAnimMax]    = useState('20')
+  const [denAnimStep,   setDenAnimStep]   = useState('1')
+
   const canvasRef      = useRef<HTMLCanvasElement>(null)
   const panRef         = useRef({ x: 0, y: 0 })
   const zoomRef        = useRef(1)
@@ -267,19 +306,24 @@ function App() {
   const numVal = evalFloat(numExpr)
   const denVal = evalFloat(denExpr)
 
-  // Whether both sides are plain integers — determines slider cap
+  // Whether both sides are plain decimal literals — determines slider cap
   const isSimpleRational =
     numVal !== null && denVal !== null && denVal !== 0 &&
-    Number.isSafeInteger(numVal) && Number.isSafeInteger(denVal)
+    isSimpleDecimal(numExpr) && isSimpleDecimal(denExpr) &&
+    toScaledIntegers(numVal, denVal) !== null
 
   const maxDigits = isSimpleRational ? MAX_RATIONAL_DIGITS : MAX_IRRATIONAL_DIGITS
 
   const effectiveDigits = Math.min(numDigits, maxDigits)
 
+  // Skip debounce for whichever field is animating so the canvas updates each tick
+  const effectiveNumExpr = numAnimActive ? numExpr : dNumExpr
+  const effectiveDenExpr = denAnimActive ? denExpr : dDenExpr
+
   // Heavy Decimal computation, only runs after inputs settle
   const digits = useMemo(
-    () => computeDigits(dNumExpr, dDenExpr, Math.min(dNumDigits, maxDigits)),
-    [dNumExpr, dDenExpr, dNumDigits, maxDigits],
+    () => computeDigits(effectiveNumExpr, effectiveDenExpr, Math.min(dNumDigits, maxDigits)),
+    [effectiveNumExpr, effectiveDenExpr, dNumDigits, maxDigits],
   )
 
   const draw = useCallback(() => {
@@ -388,6 +432,46 @@ function App() {
 
   const stopDrag = () => { isDragging.current = false }
 
+  useEffect(() => {
+    if (!numAnimActive) return
+    const min = parseFloat(numAnimMin)
+    const max = parseFloat(numAnimMax)
+    const step = parseFloat(numAnimStep)
+    if (isNaN(min) || isNaN(max) || isNaN(step) || step <= 0 || min >= max) return
+    numAnimDirRef.current = 1
+    const id = setInterval(() => {
+      setNumExpr(prev => {
+        const val = parseFloat(prev)
+        if (isNaN(val)) return prev
+        let next = roundToStep(val + numAnimDirRef.current * step, step)
+        if (next >= max) { next = max; numAnimDirRef.current = -1 }
+        else if (next <= min) { next = min; numAnimDirRef.current = 1 }
+        return String(next)
+      })
+    }, 50)
+    return () => clearInterval(id)
+  }, [numAnimActive, numAnimMin, numAnimMax, numAnimStep])
+
+  useEffect(() => {
+    if (!denAnimActive) return
+    const min = parseFloat(denAnimMin)
+    const max = parseFloat(denAnimMax)
+    const step = parseFloat(denAnimStep)
+    if (isNaN(min) || isNaN(max) || isNaN(step) || step <= 0 || min >= max) return
+    denAnimDirRef.current = 1
+    const id = setInterval(() => {
+      setDenExpr(prev => {
+        const val = parseFloat(prev)
+        if (isNaN(val)) return prev
+        let next = roundToStep(val + denAnimDirRef.current * step, step)
+        if (next >= max) { next = max; denAnimDirRef.current = -1 }
+        else if (next <= min) { next = min; denAnimDirRef.current = 1 }
+        return String(next)
+      })
+    }, 50)
+    return () => clearInterval(id)
+  }, [denAnimActive, denAnimMin, denAnimMax, denAnimStep])
+
   const insertSymbol = (s: string) => {
     if (activeInput.current === 'num') {
       setNumExpr(x => x + s)
@@ -416,6 +500,18 @@ function App() {
               placeholder="numerator"
               spellCheck={false}
             />
+            <div className="anim-row">
+              <button
+                className={`anim-play${numAnimActive ? ' active' : ''}`}
+                onClick={() => setNumAnimActive(a => !a)}
+                title="Animate numerator"
+              >
+                {numAnimActive ? '⏹' : '▶'}
+              </button>
+              <label className="anim-field"><span>min</span><input value={numAnimMin} onChange={e => setNumAnimMin(e.target.value)} /></label>
+              <label className="anim-field"><span>max</span><input value={numAnimMax} onChange={e => setNumAnimMax(e.target.value)} /></label>
+              <label className="anim-field"><span>step</span><input value={numAnimStep} onChange={e => setNumAnimStep(e.target.value)} /></label>
+            </div>
             <span className="bar" />
             <input
               ref={denInputRef}
@@ -426,6 +522,18 @@ function App() {
               placeholder="denominator"
               spellCheck={false}
             />
+            <div className="anim-row">
+              <button
+                className={`anim-play${denAnimActive ? ' active' : ''}`}
+                onClick={() => setDenAnimActive(a => !a)}
+                title="Animate denominator"
+              >
+                {denAnimActive ? '⏹' : '▶'}
+              </button>
+              <label className="anim-field"><span>min</span><input value={denAnimMin} onChange={e => setDenAnimMin(e.target.value)} /></label>
+              <label className="anim-field"><span>max</span><input value={denAnimMax} onChange={e => setDenAnimMax(e.target.value)} /></label>
+              <label className="anim-field"><span>step</span><input value={denAnimStep} onChange={e => setDenAnimStep(e.target.value)} /></label>
+            </div>
           </div>
           <span className="decimal-preview">≈ {decimalStr}</span>
           <div className="inserts">
