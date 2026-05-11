@@ -199,11 +199,11 @@ function roundToStep(val: number, step: number): number {
 
 // ─── Digit extraction ─────────────────────────────────────────────────────────
 
-function digitsExact(num: number, den: number, count: number): number[] {
+function digitsExact(num: number, den: number, count: number, base = 10): number[] {
   const d: number[] = []
   let r = ((num % den) + den) % den
   for (let i = 0; i < count; i++) {
-    r *= 10
+    r *= base
     d.push(Math.floor(r / den))
     r %= den
     if (r === 0) break
@@ -211,13 +211,14 @@ function digitsExact(num: number, den: number, count: number): number[] {
   return d
 }
 
-function digitsFromDecimal(value: Decimal, count: number): number[] {
+function digitsFromDecimal(value: Decimal, count: number, base = 10): number[] {
   const d: number[] = []
   let frac = value.abs().minus(value.abs().floor())
+  const B = new Decimal(base)
   for (let i = 0; i < count; i++) {
-    frac = frac.times(10)
+    frac = frac.times(B)
     const digit = frac.floor()
-    d.push(Math.min(9, Math.max(0, digit.toNumber())))
+    d.push(Math.min(base - 1, Math.max(0, digit.toNumber())))
     frac = frac.minus(digit)
     if (frac.isZero()) break
   }
@@ -227,14 +228,14 @@ function digitsFromDecimal(value: Decimal, count: number): number[] {
 const MAX_RATIONAL_DIGITS   = 10000
 const MAX_IRRATIONAL_DIGITS = 500
 
-function computeDigits(numExpr: string, denExpr: string, count: number): number[] {
+function computeDigits(numExpr: string, denExpr: string, count: number, base = 10): number[] {
   // Fast path: both expressions are plain decimal literals — scale to integers
   const nf = evalFloat(numExpr)
   const df = evalFloat(denExpr)
   if (nf !== null && df !== null && df !== 0 &&
       isSimpleDecimal(numExpr) && isSimpleDecimal(denExpr)) {
     const scaled = toScaledIntegers(nf, df)
-    if (scaled) return digitsExact(scaled[0], scaled[1], count)
+    if (scaled) return digitsExact(scaled[0], scaled[1], count, base)
   }
 
   // Slow path: arbitrary-precision Decimal for irrationals
@@ -243,7 +244,7 @@ function computeDigits(numExpr: string, denExpr: string, count: number): number[
   const numD = evalDecimal(numExpr, prec)
   const denD = evalDecimal(denExpr, prec)
   if (!numD || !denD || denD.isZero()) return []
-  return digitsFromDecimal(numD.div(denD), cap)
+  return digitsFromDecimal(numD.div(denD), cap, base)
 }
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
@@ -274,12 +275,14 @@ function App() {
   const [denExpr, setDenExpr] = useState('7')
   const [numDigits, setNumDigits] = useState(1000)
   const [segLen, setSegLen] = useState(8)
+  const [base, setBase] = useState(10)
   const [allNumeratorsMode, setAllNumeratorsMode] = useState(false)
 
   const dNumExpr  = useDebounced(numExpr,  300)
   const dDenExpr  = useDebounced(denExpr,  300)
   const dNumDigits = useDebounced(numDigits, 300)
   const dSegLen   = useDebounced(segLen,   150)
+  const dBase     = useDebounced(base,     150)
 
   const numAnimDirRef  = useRef<1 | -1>(1)
   const [numAnimActive, setNumAnimActive] = useState(false)
@@ -324,8 +327,8 @@ function App() {
 
   // Heavy Decimal computation, only runs after inputs settle
   const digits = useMemo(
-    () => computeDigits(effectiveNumExpr, effectiveDenExpr, Math.min(dNumDigits, maxDigits)),
-    [effectiveNumExpr, effectiveDenExpr, dNumDigits, maxDigits],
+    () => computeDigits(effectiveNumExpr, effectiveDenExpr, Math.min(dNumDigits, maxDigits), dBase),
+    [effectiveNumExpr, effectiveDenExpr, dNumDigits, maxDigits, dBase],
   )
 
   const allNumeratorsDigits = useMemo(() => {
@@ -334,9 +337,9 @@ function App() {
     if (den === null || !Number.isInteger(den) || den < 2) return null
     const count = Math.min(dNumDigits, MAX_RATIONAL_DIGITS)
     const result: number[][] = []
-    for (let n = 1; n < den; n++) result.push(digitsExact(n, den, count))
+    for (let n = 1; n < den; n++) result.push(digitsExact(n, den, count, dBase))
     return result
-  }, [allNumeratorsMode, effectiveDenExpr, dNumDigits])
+  }, [allNumeratorsMode, effectiveDenExpr, dNumDigits, dBase])
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -368,7 +371,7 @@ function App() {
         let x = startX, y = startY
         ctx.moveTo(x, y)
         for (let i = 0; i < pathDigits.length; i++) {
-          const angle = (pathDigits[i] / 10) * 2 * Math.PI
+          const angle = (pathDigits[i] / dBase) * 2 * Math.PI
           x += Math.cos(angle) * step
           y += Math.sin(angle) * step
           ctx.lineTo(x, y)
@@ -385,7 +388,7 @@ function App() {
       xs[0] = startX
       ys[0] = startY
       for (let i = 0; i < N; i++) {
-        const angle = (digits[i] / 10) * 2 * Math.PI
+        const angle = (digits[i] / dBase) * 2 * Math.PI
         xs[i + 1] = xs[i] + Math.cos(angle) * step
         ys[i + 1] = ys[i] + Math.sin(angle) * step
       }
@@ -410,7 +413,7 @@ function App() {
     ctx.beginPath()
     ctx.arc(startX, startY, 3, 0, 2 * Math.PI)
     ctx.fill()
-  }, [digits, allNumeratorsDigits, allNumeratorsMode, dSegLen])
+  }, [digits, allNumeratorsDigits, allNumeratorsMode, dSegLen, dBase])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -605,6 +608,16 @@ function App() {
               step="10"
               value={effectiveDigits}
               onChange={e => setNumDigits(parseInt(e.target.value))}
+            />
+          </label>
+          <label>
+            <span>Base: {base}</span>
+            <input
+              type="range"
+              min="2"
+              max="36"
+              value={base}
+              onChange={e => setBase(parseInt(e.target.value))}
             />
           </label>
           <label>
