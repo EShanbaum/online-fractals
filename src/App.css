@@ -137,6 +137,30 @@
   margin-top: 2px;
 }
 
+.all-num-btn {
+  background: #1a1a2e;
+  border: 1px solid #2e2e4e;
+  border-radius: 5px;
+  color: #9ca3af;
+  font-size: 12px;
+  padding: 4px 9px;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.all-num-btn:hover {
+  background: #2d2b55;
+  border-color: #6366f1;
+}
+
+.all-num-btn.active {
+  background: #1e1b4b;
+  border-color: #6366f1;
+  color: #a5b4fc;
+}
+
 .anim-play {
   background: #1a1a2e;
   border: 1px solid #2e2e4e;

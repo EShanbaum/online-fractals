@@ -274,6 +274,7 @@ function App() {
   const [denExpr, setDenExpr] = useState('7')
   const [numDigits, setNumDigits] = useState(1000)
   const [segLen, setSegLen] = useState(8)
+  const [allNumeratorsMode, setAllNumeratorsMode] = useState(false)
 
   const dNumExpr  = useDebounced(numExpr,  300)
   const dDenExpr  = useDebounced(denExpr,  300)
@@ -312,7 +313,8 @@ function App() {
     isSimpleDecimal(numExpr) && isSimpleDecimal(denExpr) &&
     toScaledIntegers(numVal, denVal) !== null
 
-  const maxDigits = isSimpleRational ? MAX_RATIONAL_DIGITS : MAX_IRRATIONAL_DIGITS
+  // In all-numerators mode every fraction is rational, so always allow the full cap
+  const maxDigits = (allNumeratorsMode || isSimpleRational) ? MAX_RATIONAL_DIGITS : MAX_IRRATIONAL_DIGITS
 
   const effectiveDigits = Math.min(numDigits, maxDigits)
 
@@ -325,6 +327,16 @@ function App() {
     () => computeDigits(effectiveNumExpr, effectiveDenExpr, Math.min(dNumDigits, maxDigits)),
     [effectiveNumExpr, effectiveDenExpr, dNumDigits, maxDigits],
   )
+
+  const allNumeratorsDigits = useMemo(() => {
+    if (!allNumeratorsMode) return null
+    const den = evalFloat(effectiveDenExpr)
+    if (den === null || !Number.isInteger(den) || den < 2) return null
+    const count = Math.min(dNumDigits, MAX_RATIONAL_DIGITS)
+    const result: number[][] = []
+    for (let n = 1; n < den; n++) result.push(digitsExact(n, den, count))
+    return result
+  }, [allNumeratorsMode, effectiveDenExpr, dNumDigits])
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -340,45 +352,65 @@ function App() {
     ctx.fillStyle = '#0a0a0f'
     ctx.fillRect(0, 0, w, h)
 
-    if (digits.length === 0) return
-
     const zoom   = zoomRef.current
     const step   = dSegLen * zoom
     const startX = w / 2 + panRef.current.x
     const startY = h / 2 + panRef.current.y
-    const N      = digits.length
 
-    // Pre-compute all vertex positions with a typed array (fast)
-    const xs = new Float32Array(N + 1)
-    const ys = new Float32Array(N + 1)
-    xs[0] = startX
-    ys[0] = startY
-    for (let i = 0; i < N; i++) {
-      const angle = (digits[i] / 10) * 2 * Math.PI
-      xs[i + 1] = xs[i] + Math.cos(angle) * step
-      ys[i + 1] = ys[i] + Math.sin(angle) * step
-    }
+    if (allNumeratorsMode) {
+      if (!allNumeratorsDigits || allNumeratorsDigits.length === 0) return
+      ctx.lineWidth = Math.max(0.3, zoom * 0.7)
+      allNumeratorsDigits.forEach((pathDigits, idx) => {
+        if (pathDigits.length === 0) return
+        const hue = (idx / allNumeratorsDigits.length) * 360
+        ctx.strokeStyle = `hsla(${hue}, 85%, 65%, 0.75)`
+        ctx.beginPath()
+        let x = startX, y = startY
+        ctx.moveTo(x, y)
+        for (let i = 0; i < pathDigits.length; i++) {
+          const angle = (pathDigits[i] / 10) * 2 * Math.PI
+          x += Math.cos(angle) * step
+          y += Math.sin(angle) * step
+          ctx.lineTo(x, y)
+        }
+        ctx.stroke()
+      })
+    } else {
+      if (digits.length === 0) return
+      const N = digits.length
 
-    // Batch segments into ~200 stroke() calls instead of N calls.
-    // Each batch shares one colour, so we still get a smooth gradient.
-    const BATCH = Math.max(1, Math.floor(N / 200))
-    ctx.lineWidth = Math.max(0.5, zoom)
+      // Pre-compute all vertex positions with a typed array (fast)
+      const xs = new Float32Array(N + 1)
+      const ys = new Float32Array(N + 1)
+      xs[0] = startX
+      ys[0] = startY
+      for (let i = 0; i < N; i++) {
+        const angle = (digits[i] / 10) * 2 * Math.PI
+        xs[i + 1] = xs[i] + Math.cos(angle) * step
+        ys[i + 1] = ys[i] + Math.sin(angle) * step
+      }
 
-    for (let i = 0; i < N; i += BATCH) {
-      const end = Math.min(i + BATCH, N)
-      const hue = ((i + end) * 0.5 / N) * 360
-      ctx.strokeStyle = `hsl(${hue}, 85%, 65%)`
-      ctx.beginPath()
-      ctx.moveTo(xs[i], ys[i])
-      for (let j = i + 1; j <= end; j++) ctx.lineTo(xs[j], ys[j])
-      ctx.stroke()
+      // Batch segments into ~200 stroke() calls instead of N calls.
+      // Each batch shares one colour, so we still get a smooth gradient.
+      const BATCH = Math.max(1, Math.floor(N / 200))
+      ctx.lineWidth = Math.max(0.5, zoom)
+
+      for (let i = 0; i < N; i += BATCH) {
+        const end = Math.min(i + BATCH, N)
+        const hue = ((i + end) * 0.5 / N) * 360
+        ctx.strokeStyle = `hsl(${hue}, 85%, 65%)`
+        ctx.beginPath()
+        ctx.moveTo(xs[i], ys[i])
+        for (let j = i + 1; j <= end; j++) ctx.lineTo(xs[j], ys[j])
+        ctx.stroke()
+      }
     }
 
     ctx.fillStyle = 'rgba(255,255,255,0.85)'
     ctx.beginPath()
     ctx.arc(startX, startY, 3, 0, 2 * Math.PI)
     ctx.fill()
-  }, [digits, dSegLen])
+  }, [digits, allNumeratorsDigits, allNumeratorsMode, dSegLen])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -491,16 +523,27 @@ function App() {
       <header className="controls">
         <div className="left-controls">
           <div className="fraction-input">
-            <input
-              ref={numInputRef}
-              className={numVal === null ? 'invalid' : ''}
-              value={numExpr}
-              onChange={e => setNumExpr(e.target.value)}
-              onFocus={() => { activeInput.current = 'num' }}
-              placeholder="numerator"
-              spellCheck={false}
-            />
-            <div className="anim-row">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input
+                ref={numInputRef}
+                className={numVal === null ? 'invalid' : ''}
+                value={numExpr}
+                onChange={e => setNumExpr(e.target.value)}
+                onFocus={() => { activeInput.current = 'num' }}
+                placeholder="numerator"
+                spellCheck={false}
+                disabled={allNumeratorsMode}
+                style={allNumeratorsMode ? { opacity: 0.35 } : undefined}
+              />
+              <button
+                className={`all-num-btn${allNumeratorsMode ? ' active' : ''}`}
+                onClick={() => setAllNumeratorsMode(m => !m)}
+                title="Draw paths for all numerators 1 through den−1"
+              >
+                All&nbsp;nums
+              </button>
+            </div>
+            <div className="anim-row" style={allNumeratorsMode ? { opacity: 0.35, pointerEvents: 'none' } : undefined}>
               <button
                 className={`anim-play${numAnimActive ? ' active' : ''}`}
                 onClick={() => setNumAnimActive(a => !a)}
