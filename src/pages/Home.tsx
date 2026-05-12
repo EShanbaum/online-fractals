@@ -8,6 +8,12 @@ const TOOLS = [
     title: 'Fraction Paths',
     description: 'Visualize the base-n digit expansion of any fraction as a directed path on the plane.',
   },
+  {
+    path: '/toothpick',
+    icon: '⌥',
+    title: 'Custom Sequences',
+    description: 'Draw a shape, mark attachment and growth points, and watch it recursively tile the plane.',
+  },
 ]
 
 export default function Home() {
